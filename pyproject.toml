@@ -9,8 +9,12 @@ description = "TanStack AI compatible SSE backend with pydantic-ai"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-  "fastapi",
   "pydantic",
   "pydantic-ai",
+]
+
+[project.optional-dependencies]
+server = [
+  "fastapi",
   "uvicorn",
 ]

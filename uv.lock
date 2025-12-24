@@ -2564,19 +2564,24 @@ name = "tanstack-pydantic-ai"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "fastapi" },
     { name = "pydantic" },
     { name = "pydantic-ai" },
+]
+
+[package.optional-dependencies]
+server = [
+    { name = "fastapi" },
     { name = "uvicorn" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "fastapi" },
+    { name = "fastapi", marker = "extra == 'server'" },
     { name = "pydantic" },
     { name = "pydantic-ai" },
-    { name = "uvicorn" },
+    { name = "uvicorn", marker = "extra == 'server'" },
 ]
+provides-extras = ["server"]
 
 [[package]]
 name = "temporalio"
