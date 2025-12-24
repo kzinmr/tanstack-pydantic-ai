@@ -1,0 +1,11 @@
+{
+  "name": "tanstack-ai-sse-verify",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@tanstack/ai": "0.2.0"
+  },
+  "scripts": {
+    "verify": "node verify.mjs"
+  }
+}
