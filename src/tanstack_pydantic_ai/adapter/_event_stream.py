@@ -7,6 +7,7 @@ Transforms pydantic-ai native events into TanStack StreamChunk events.
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from dataclasses import dataclass, field
 from typing import (
@@ -63,6 +64,8 @@ if TYPE_CHECKING:
 
 
 FinishReason = Literal["stop", "tool_calls", "length", "content_filter"] | None
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_finish_reason(
@@ -149,6 +152,13 @@ class TanStackEventStream(Generic[AgentDepsT, OutputDataT]):
 
     async def on_error(self, error: Exception) -> AsyncIterator[StreamChunk]:
         """Called when an error occurs during streaming."""
+        logger.error(
+            "TanStack stream error (run_id=%s model=%s): %s",
+            self.message_id,
+            self._model_name,
+            str(error),
+            exc_info=error,
+        )
         # Emit error separately; keep finishReason valid for DoneStreamChunk.
         self._finish_reason = "stop"
         yield ErrorStreamChunk(
@@ -240,6 +250,12 @@ class TanStackEventStream(Generic[AgentDepsT, OutputDataT]):
     ) -> AsyncIterator[StreamChunk]:
         """Handle function tool call event."""
         part: ToolCallPart = event.part
+        logger.info(
+            "Tool call (run_id=%s): %s id=%s",
+            self.message_id,
+            part.tool_name,
+            part.tool_call_id,
+        )
         yield ToolCallStreamChunk(
             id=self.message_id,
             model=self._model_name,
@@ -266,6 +282,13 @@ class TanStackEventStream(Generic[AgentDepsT, OutputDataT]):
             content = event.result.content
             if not isinstance(content, str):
                 content = json.dumps(content, ensure_ascii=False)
+            preview = content if len(content) <= 200 else (content[:200] + "…")
+            logger.info(
+                "Tool result (run_id=%s): id=%s preview=%r",
+                self.message_id,
+                event.result.tool_call_id,
+                preview,
+            )
             yield ToolResultStreamChunk(
                 id=self.message_id,
                 model=self._model_name,

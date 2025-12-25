@@ -333,10 +333,20 @@ def stream_chat(
         result_future = result_holder.ensure_future()
 
         try:
+
+            def _agent_has_output_validators() -> bool:
+                # See adapter/_adapter.py for rationale.
+                for attr in ("output_validators", "_output_validators"):
+                    validators = getattr(agent, attr, None)
+                    if validators:
+                        return True
+                return False
+
             kwargs: Dict[str, Any] = {
                 "message_history": message_history or [],
-                "output_type": [str, DeferredToolRequests],
             }
+            if not _agent_has_output_validators():
+                kwargs["output_type"] = [str, DeferredToolRequests]
             if model is not None:
                 kwargs["model"] = model
 
@@ -429,11 +439,21 @@ def stream_continue(
         result_future = result_holder.ensure_future()
 
         try:
+
+            def _agent_has_output_validators() -> bool:
+                # See adapter/_adapter.py for rationale.
+                for attr in ("output_validators", "_output_validators"):
+                    validators = getattr(agent, attr, None)
+                    if validators:
+                        return True
+                return False
+
             kwargs: Dict[str, Any] = {
                 "message_history": message_history,
-                "output_type": [str, DeferredToolRequests],
                 "deferred_tool_results": deferred_tool_results,
             }
+            if not _agent_has_output_validators():
+                kwargs["output_type"] = [str, DeferredToolRequests]
             if model is not None:
                 kwargs["model"] = model
 

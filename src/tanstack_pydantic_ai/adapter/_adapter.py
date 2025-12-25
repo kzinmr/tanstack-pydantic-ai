@@ -270,7 +270,10 @@ class TanStackAIAdapter(Generic[AgentDepsT, OutputDataT]):
                     if isinstance(part, TextPart):
                         text_parts.append(part.content)
                     elif isinstance(part, ToolCallPart):
-                        from .request_types import ToolCallFunction, ToolCallPart as TCPart
+                        from .request_types import (
+                            ToolCallFunction,
+                            ToolCallPart as TCPart,
+                        )
 
                         tool_calls.append(
                             TCPart(
@@ -322,7 +325,47 @@ class TanStackAIAdapter(Generic[AgentDepsT, OutputDataT]):
             stored = self.store.get(self.run_id)
             if stored is None:
                 raise ValueError(f"Unknown run_id: {self.run_id}")
-            return stored.messages
+            # pydantic-ai expects "unprocessed tool calls" to be present in the
+            # message history when deferred_tool_results are provided. In HITL
+            # flows, we may have stored the pending deferred tool requests
+            # separately (stored.pending). If the message history doesn't include
+            # those tool calls, inject them so continuation can match approvals/
+            # tool_results to tool_call_id.
+            messages = list(stored.messages)
+
+            pending = getattr(stored, "pending", None)
+            if pending is not None:
+                existing_tool_call_ids: set[str] = set()
+                for msg in messages:
+                    if isinstance(msg, ModelResponse):
+                        for part in msg.parts:
+                            if isinstance(part, ToolCallPart) and part.tool_call_id:
+                                existing_tool_call_ids.add(part.tool_call_id)
+
+                injected_parts: List[ToolCallPart] = []
+
+                def _inject_from(parts: Any) -> None:
+                    for p in parts or []:
+                        tool_call_id = getattr(p, "tool_call_id", None)
+                        if not tool_call_id or tool_call_id in existing_tool_call_ids:
+                            continue
+                        injected_parts.append(
+                            ToolCallPart(
+                                tool_name=getattr(p, "tool_name", "unknown"),
+                                args=getattr(p, "args", {}) or {},
+                                tool_call_id=tool_call_id,
+                            )
+                        )
+                        existing_tool_call_ids.add(tool_call_id)
+
+                # DeferredToolRequests usually has .approvals and .calls
+                _inject_from(getattr(pending, "approvals", None))
+                _inject_from(getattr(pending, "calls", None))
+
+                if injected_parts:
+                    messages.append(ModelResponse(parts=injected_parts))
+
+            return messages
 
         # Stateless: build from request messages
         messages = self.messages
@@ -350,10 +393,25 @@ class TanStackAIAdapter(Generic[AgentDepsT, OutputDataT]):
         run_id = self.run_id
         model = self.run_input.model
 
+        def _agent_has_output_validators() -> bool:
+            """
+            pydantic-ai forbids passing a custom run `output_type` when the Agent
+            has output validators. We detect validators via common internal/public
+            attributes across pydantic-ai versions.
+            """
+            for attr in ("output_validators", "_output_validators"):
+                validators = getattr(self.agent, attr, None)
+                if validators:
+                    return True
+            return False
+
         kwargs: Dict[str, Any] = {
             "message_history": self.message_history,
-            "output_type": [str, DeferredToolRequests],
         }
+        # Only pass output_type when it's safe to do so (i.e. no output validators).
+        # Prefer configuring Agent(output_type=...) at construction time.
+        if not _agent_has_output_validators():
+            kwargs["output_type"] = [str, DeferredToolRequests]
         if model:
             kwargs["model"] = model
         if self.deps is not None:

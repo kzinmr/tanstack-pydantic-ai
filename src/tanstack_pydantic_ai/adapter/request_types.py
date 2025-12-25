@@ -44,7 +44,10 @@ class RequestData(BaseModel):
     transforms into pydantic-ai arguments.
     """
 
-    messages: List[UIMessage]
+    # NOTE: For stateful continuation (HITL), the frontend may send only
+    # {run_id, approvals/tool_results}. In that case, message history is loaded
+    # from the server-side store, so `messages` must be optional.
+    messages: List[UIMessage] = Field(default_factory=list)
     model: Optional[str] = None
     data: Dict[str, Any] = Field(default_factory=dict)
     # For continuation after deferred tools
