@@ -14,7 +14,7 @@ TanStack AI-compatible streaming backend for pydantic-ai.
 ## Installation
 
 ```sh
-pip install tanstack-pydantic-ai
+uv add git+https://github.com/kzinmr/tanstack-pydantic-ai.git
 ```
 
 ## Module Structure
