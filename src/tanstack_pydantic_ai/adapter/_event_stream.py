@@ -46,7 +46,11 @@ from ..shared.sse import now_ms
 from .request_types import RequestData
 
 if TYPE_CHECKING:
-    from pydantic_ai import AgentRunResultEvent, FunctionToolCallEvent, FunctionToolResultEvent
+    from pydantic_ai import (
+        AgentRunResultEvent,
+        FunctionToolCallEvent,
+        FunctionToolResultEvent,
+    )
     from pydantic_ai.messages import (
         FilePart,
         PartDeltaEvent,
@@ -58,7 +62,21 @@ if TYPE_CHECKING:
     )
 
 
-FinishReason = Literal["stop", "tool_calls", "error", "length", "content_filter"] | None
+FinishReason = Literal["stop", "tool_calls", "length", "content_filter"] | None
+
+
+def _normalize_finish_reason(
+    reason: FinishReason | str | None,
+) -> Literal["stop", "length", "tool_calls", "content_filter"]:
+    """
+    Normalize finish reason to the allowed TanStack/OpenAI-compatible values.
+
+    Note: errors are emitted via ErrorStreamChunk; DoneStreamChunk.finishReason
+    must remain within the allowed literal set.
+    """
+    if reason in ("stop", "length", "tool_calls", "content_filter"):
+        return reason
+    return "stop"
 
 
 @dataclass
@@ -126,12 +144,13 @@ class TanStackEventStream(Generic[AgentDepsT, OutputDataT]):
             id=self.message_id,
             model=self._model_name,
             timestamp=now_ms(),
-            finishReason=self._finish_reason or "stop",
+            finishReason=_normalize_finish_reason(self._finish_reason),
         )
 
     async def on_error(self, error: Exception) -> AsyncIterator[StreamChunk]:
         """Called when an error occurs during streaming."""
-        self._finish_reason = "error"
+        # Emit error separately; keep finishReason valid for DoneStreamChunk.
+        self._finish_reason = "stop"
         yield ErrorStreamChunk(
             id=self.message_id,
             model=self._model_name,
@@ -336,7 +355,11 @@ class TanStackEventStream(Generic[AgentDepsT, OutputDataT]):
 
         This is the main entry point for event transformation.
         """
-        from pydantic_ai import AgentRunResultEvent, FunctionToolCallEvent, FunctionToolResultEvent
+        from pydantic_ai import (
+            AgentRunResultEvent,
+            FunctionToolCallEvent,
+            FunctionToolResultEvent,
+        )
         from pydantic_ai.messages import (
             PartDeltaEvent,
             PartStartEvent,
@@ -360,7 +383,9 @@ class TanStackEventStream(Generic[AgentDepsT, OutputDataT]):
                         async for chunk in self.handle_text_start(event, event.part):
                             yield chunk
                     elif isinstance(event.part, ThinkingPart):
-                        async for chunk in self.handle_thinking_start(event, event.part):
+                        async for chunk in self.handle_thinking_start(
+                            event, event.part
+                        ):
                             yield chunk
 
                 elif isinstance(event, PartDeltaEvent):
@@ -368,7 +393,9 @@ class TanStackEventStream(Generic[AgentDepsT, OutputDataT]):
                         async for chunk in self.handle_text_delta(event, event.delta):
                             yield chunk
                     elif isinstance(event.delta, ThinkingPartDelta):
-                        async for chunk in self.handle_thinking_delta(event, event.delta):
+                        async for chunk in self.handle_thinking_delta(
+                            event, event.delta
+                        ):
                             yield chunk
 
                 elif isinstance(event, FunctionToolCallEvent):
