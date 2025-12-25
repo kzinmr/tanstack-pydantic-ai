@@ -26,6 +26,7 @@ from .streaming import (
     stream_chat,
     stream_continue,
 )
+from .ui.tanstack import TanStackAIAdapter, TanStackEventStream
 
 __all__ = [
     # Chunk types
@@ -53,11 +54,14 @@ __all__ = [
     "encode_done",
     "now_ms",
     "sse_data",
-    # Streaming
+    # Streaming (functional API)
     "StreamResult",
     "StreamState",
     "build_message_history",
     "handle_stream_event",
     "stream_chat",
     "stream_continue",
+    # UIAdapter (class-based API)
+    "TanStackAIAdapter",
+    "TanStackEventStream",
 ]
