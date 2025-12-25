@@ -22,8 +22,9 @@ from tanstack_pydantic_ai import (
     encode_done,
     now_ms,
     sse_data,
+    stream_chat,
+    stream_continue,
 )
-from tanstack_pydantic_ai.streaming import stream_chat, stream_continue
 
 
 class ChatMessage(BaseModel):
@@ -88,7 +89,7 @@ def create_app(
         user_prompt = req.messages[-1].content
 
         async def gen():
-            from tanstack_pydantic_ai.streaming import build_message_history
+            from tanstack_pydantic_ai import build_message_history
 
             history = build_message_history(history_tuples)
 

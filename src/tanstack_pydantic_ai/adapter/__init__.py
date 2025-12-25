@@ -1,12 +1,13 @@
 """
-TanStack AI protocol adapter for pydantic-ai.
+UIAdapter API for TanStack AI integration.
 
-This module provides UIAdapter-based integration following the pydantic-ai pattern.
+This module provides a class-based UIAdapter pattern for TanStack AI protocol.
 
 Usage:
     ```python
-    from tanstack_pydantic_ai.ui.tanstack import TanStackAIAdapter
+    from tanstack_pydantic_ai.adapter import TanStackAIAdapter, TanStackEventStream
 
+    # In FastAPI endpoint
     adapter = TanStackAIAdapter.from_request(agent, body, store=store)
     return StreamingResponse(
         adapter.streaming_response(),
@@ -15,20 +16,19 @@ Usage:
     ```
 """
 
-# Re-export from adapter module
-from ...adapter import (
+from ._adapter import TanStackAIAdapter
+from ._event_stream import TanStackEventStream
+from .request_types import (
     RequestData,
-    TanStackAIAdapter,
-    TanStackEventStream,
     ToolCallFunction,
     ToolCallPart,
     UIMessage,
 )
 
 __all__ = [
-    "RequestData",
     "TanStackAIAdapter",
     "TanStackEventStream",
+    "RequestData",
     "ToolCallFunction",
     "ToolCallPart",
     "UIMessage",

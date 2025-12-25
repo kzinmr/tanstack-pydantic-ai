@@ -1,4 +1,25 @@
-from .chunks import (
+"""
+TanStack AI integration for pydantic-ai.
+
+This package provides two APIs for TanStack AI protocol integration:
+
+1. Functional API (tanstack_pydantic_ai.functional):
+   - stream_chat(), stream_continue() functions
+   - Framework-agnostic, returns StreamResult
+
+2. UIAdapter API (tanstack_pydantic_ai.adapter):
+   - TanStackAIAdapter, TanStackEventStream classes
+   - Follows pydantic-ai UIAdapter pattern
+   - Built-in SSE encoding and response helpers
+
+Both APIs use shared components from tanstack_pydantic_ai.shared:
+   - StreamChunk types for the TanStack AI protocol
+   - InMemoryRunStore for stateful continuation
+   - SSE encoding utilities
+"""
+
+# Shared components
+from .shared.chunks import (
     ApprovalObj,
     ApprovalRequestedStreamChunk,
     BaseStreamChunk,
@@ -16,9 +37,11 @@ from .chunks import (
     ToolResultStreamChunk,
     UsageObj,
 )
-from .sse import dump_chunk, encode_done, now_ms, sse_data
-from .store import InMemoryRunStore, RunState
-from .streaming import (
+from .shared.sse import dump_chunk, encode_chunk, encode_done, now_ms, sse_data
+from .shared.store import InMemoryRunStore, RunState
+
+# Functional API
+from .functional.streaming import (
     StreamResult,
     StreamState,
     build_message_history,
@@ -26,10 +49,17 @@ from .streaming import (
     stream_chat,
     stream_continue,
 )
-from .ui.tanstack import TanStackAIAdapter, TanStackEventStream
+
+# UIAdapter API
+from .adapter import (
+    RequestData,
+    TanStackAIAdapter,
+    TanStackEventStream,
+    UIMessage,
+)
 
 __all__ = [
-    # Chunk types
+    # Shared: Chunk types
     "ApprovalObj",
     "ApprovalRequestedStreamChunk",
     "BaseStreamChunk",
@@ -46,22 +76,25 @@ __all__ = [
     "ToolInputAvailableStreamChunk",
     "ToolResultStreamChunk",
     "UsageObj",
-    # Store
+    # Shared: Store
     "InMemoryRunStore",
     "RunState",
-    # SSE utilities
+    # Shared: SSE utilities
     "dump_chunk",
+    "encode_chunk",
     "encode_done",
     "now_ms",
     "sse_data",
-    # Streaming (functional API)
+    # Functional API
     "StreamResult",
     "StreamState",
     "build_message_history",
     "handle_stream_event",
     "stream_chat",
     "stream_continue",
-    # UIAdapter (class-based API)
+    # UIAdapter API
+    "RequestData",
     "TanStackAIAdapter",
     "TanStackEventStream",
+    "UIMessage",
 ]

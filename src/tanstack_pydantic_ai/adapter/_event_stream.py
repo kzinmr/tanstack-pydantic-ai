@@ -27,7 +27,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.output import OutputDataT
 from pydantic_ai.tools import AgentDepsT
 
-from ...chunks import (
+from ..shared.chunks import (
     ApprovalObj,
     ApprovalRequestedStreamChunk,
     ContentStreamChunk,
@@ -42,7 +42,7 @@ from ...chunks import (
     ToolInputAvailableStreamChunk,
     ToolResultStreamChunk,
 )
-from ...sse import now_ms
+from ..shared.sse import now_ms
 from .request_types import RequestData
 
 if TYPE_CHECKING:

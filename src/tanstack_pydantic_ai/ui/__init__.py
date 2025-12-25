@@ -1,12 +1,24 @@
 """
-UI adapters for pydantic-ai integration.
+UI adapters for various frontend protocols.
 
-This module provides UIAdapter implementations for different UI protocols.
+Currently supports:
+- tanstack: TanStack AI protocol adapter
 """
 
-from .tanstack import TanStackAIAdapter, TanStackEventStream
+from .tanstack import (
+    RequestData,
+    TanStackAIAdapter,
+    TanStackEventStream,
+    ToolCallFunction,
+    ToolCallPart,
+    UIMessage,
+)
 
 __all__ = [
+    "RequestData",
     "TanStackAIAdapter",
     "TanStackEventStream",
+    "ToolCallFunction",
+    "ToolCallPart",
+    "UIMessage",
 ]

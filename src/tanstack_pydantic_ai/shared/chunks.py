@@ -1,3 +1,9 @@
+"""
+TanStack AI StreamChunk types.
+
+These types define the SSE streaming protocol for TanStack AI frontends.
+"""
+
 from __future__ import annotations
 
 from typing import Any, Literal, Optional, Union

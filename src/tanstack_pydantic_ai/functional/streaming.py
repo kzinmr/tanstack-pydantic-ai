@@ -18,9 +18,7 @@ from typing import (
     List,
     Literal,
     Optional,
-    Protocol,
     Tuple,
-    Union,
 )
 
 from pydantic_ai import (
@@ -47,7 +45,7 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.run import AgentRunResult
 
-from .chunks import (
+from ..shared.chunks import (
     ApprovalObj,
     ApprovalRequestedStreamChunk,
     ContentStreamChunk,
@@ -62,7 +60,7 @@ from .chunks import (
     ToolInputAvailableStreamChunk,
     ToolResultStreamChunk,
 )
-from .sse import now_ms
+from ..shared.sse import now_ms
 
 
 class StreamState:

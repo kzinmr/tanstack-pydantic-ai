@@ -11,16 +11,6 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, Field
 
 
-class UIMessage(BaseModel):
-    """A message in the TanStack AI format."""
-
-    role: Literal["user", "assistant", "system", "tool"]
-    content: Optional[str] = None
-    name: Optional[str] = None
-    toolCalls: Optional[List[ToolCallPart]] = None
-    toolCallId: Optional[str] = None
-
-
 class ToolCallFunction(BaseModel):
     """Function details in a tool call."""
 
@@ -34,6 +24,16 @@ class ToolCallPart(BaseModel):
     id: str
     type: Literal["function"] = "function"
     function: ToolCallFunction
+
+
+class UIMessage(BaseModel):
+    """A message in the TanStack AI format."""
+
+    role: Literal["user", "assistant", "system", "tool"]
+    content: Optional[str] = None
+    name: Optional[str] = None
+    toolCalls: Optional[List[ToolCallPart]] = None
+    toolCallId: Optional[str] = None
 
 
 class RequestData(BaseModel):
