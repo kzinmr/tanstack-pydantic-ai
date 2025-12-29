@@ -4,9 +4,7 @@ TanStack AI-compatible streaming backend for pydantic-ai.
 
 ## Features
 
-- Two APIs for different use cases:
-  - **Functional API**: `stream_chat()`, `stream_continue()` - framework-agnostic streaming
-  - **UIAdapter API**: `TanStackAIAdapter` - class-based pattern following pydantic-ai's UIAdapter
+- **UIAdapter API**: `TanStackAIAdapter` - class-based pattern following pydantic-ai's UIAdapter
 - Full [TanStack AI StreamChunk](https://tanstack.com/ai/latest/docs/reference/type-aliases/StreamChunk) protocol support
 - Stateful continuation for Human-in-the-Loop (HITL) flows
 - Support for pydantic-ai [Deferred Tools](https://ai.pydantic.dev/deferred-tools/)
@@ -21,17 +19,11 @@ uv add git+https://github.com/kzinmr/tanstack-pydantic-ai.git
 
 ```
 tanstack_pydantic_ai/
-├── shared/        # Shared components (StreamChunk, SSE, Store)
-├── functional/    # Function-based streaming API
-├── adapter/       # UIAdapter-based API
-└── ui/tanstack/   # Alias for adapter (backward compatibility)
+├── adapter/       # UIAdapter-based API (TanStackAIAdapter, TanStackEventStream)
+└── shared/        # Shared components (StreamChunk types, SSE utilities, Store)
 ```
 
 ## Quick Start
-
-### Option 1: UIAdapter API (Recommended)
-
-The UIAdapter pattern provides a clean, class-based interface:
 
 ```python
 from fastapi import FastAPI, Request
@@ -40,8 +32,8 @@ from pydantic_ai import Agent
 
 from tanstack_pydantic_ai import TanStackAIAdapter, InMemoryRunStore
 
-agent = Agent("openai:gpt-4o-mini")
-store = InMemoryRunStore()  # For stateful continuation
+agent = Agent("openai:gpt-5-mini")
+store = InMemoryRunStore()  # For stateful continuation (any RunStorePort works)
 
 app = FastAPI()
 
@@ -56,92 +48,17 @@ async def chat(request: Request):
         adapter.streaming_response(),
         headers=dict(adapter.response_headers),
     )
-
-@app.post("/api/chat/continue")
-async def chat_continue(request: Request):
-    adapter = TanStackAIAdapter.from_request(
-        agent=agent,
-        body=await request.body(),
-        store=store,
-    )
-    return StreamingResponse(
-        adapter.streaming_response(),
-        headers=dict(adapter.response_headers),
-    )
 ```
 
-### Option 2: Functional API
-
-For more control or custom frameworks:
-
-```python
-from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
-from pydantic_ai import Agent
-
-from tanstack_pydantic_ai import (
-    stream_chat,
-    InMemoryRunStore,
-    dump_chunk,
-    sse_data,
-    encode_done,
-)
-
-agent = Agent("openai:gpt-4o-mini")
-store = InMemoryRunStore()
-
-app = FastAPI()
-
-@app.post("/chat")
-async def chat(messages: list, model: str = None):
-    user_prompt = messages[-1]["content"]
-
-    async def generate():
-        stream = stream_chat(agent, user_prompt, model=model)
-
-        async for chunk in stream:
-            yield sse_data(dump_chunk(chunk))
-
-        # Save result for continuation
-        result = await stream.result()
-        store.set_messages(stream.run_id, result.all_messages(), model)
-
-        yield encode_done()
-
-    return StreamingResponse(generate(), media_type="text/event-stream")
-```
+Continuation requests can be sent to the same endpoint with `run_id` and
+`tool_results`/`approvals` in the request body.
 
 ## API Reference
-
-### Functional API
-
-```python
-from tanstack_pydantic_ai.functional import stream_chat, stream_continue, StreamResult
-
-# Start a new chat
-stream: StreamResult = stream_chat(
-    agent,
-    user_prompt="Hello!",
-    message_history=None,  # Optional
-    model=None,            # Optional model override
-    run_id=None,           # Optional (auto-generated)
-)
-
-# Iterate over chunks
-async for chunk in stream:
-    print(chunk.type)  # content, thinking, tool_call, tool_result, done, error
-
-# Get final result
-result = await stream.result()
-messages = result.all_messages()
-output = result.output  # str | DeferredToolRequests
-```
 
 ### UIAdapter API
 
 ```python
-from tanstack_pydantic_ai.ui.tanstack import TanStackAIAdapter, TanStackEventStream
-# Or: from tanstack_pydantic_ai.adapter import TanStackAIAdapter
+from tanstack_pydantic_ai import TanStackAIAdapter, TanStackEventStream
 
 adapter = TanStackAIAdapter.from_request(
     agent=agent,
@@ -164,47 +81,44 @@ async for chunk in adapter.run_stream():
 # Full SSE response
 async for data in adapter.streaming_response():
     ...  # bytes (SSE-encoded)
+
+# Optional error handling helpers
+async for data in TanStackAIAdapter.stream_with_error_handling(
+    adapter.streaming_response(),
+    model="unknown",
+    run_id=adapter.run_id,
+):
+    ...  # bytes (SSE-encoded)
 ```
 
-### Shared Components
+### Public Exports
 
 ```python
-from tanstack_pydantic_ai.shared import (
-    # Chunk types
-    StreamChunk,
-    ContentStreamChunk,
-    ThinkingStreamChunk,
-    ToolCallStreamChunk,
-    ToolResultStreamChunk,
-    ApprovalRequestedStreamChunk,
-    DoneStreamChunk,
-    ErrorStreamChunk,
-
+from tanstack_pydantic_ai import (
     # Store
+    RunStorePort,
     InMemoryRunStore,
     RunState,
-
-    # SSE utilities
-    encode_chunk,
-    encode_done,
-    dump_chunk,
-    sse_data,
-    now_ms,
+    # Stream chunk typing
+    StreamChunk,
+    StreamChunkType,
 )
 ```
 
+Low-level chunk models, request types, and SSE helpers are internal and may change; import them from submodules if you need them (`tanstack_pydantic_ai.shared.*`, `tanstack_pydantic_ai.adapter.request_types`).
+
 ## StreamChunk Types
 
-| Type | Description |
-|------|-------------|
-| `content` | Text content with delta streaming |
-| `thinking` | Reasoning/thinking content (Claude extended thinking) |
-| `tool_call` | Function tool invocation |
-| `tool_result` | Tool execution result |
+| Type                   | Description                              |
+| ---------------------- | ---------------------------------------- |
+| `content`              | Text content with delta streaming        |
+| `done`                 | Stream completed                         |
+| `error`                | Error occurred                           |
+| `tool_call`            | Function tool invocation                 |
+| `tool_result`          | Tool execution result                    |
 | `tool-input-available` | Deferred tool ready for client execution |
-| `approval-requested` | Tool requires user approval |
-| `error` | Error occurred |
-| `done` | Stream completed |
+| `approval-requested`   | Tool requires user approval              |
+| `thinking`             | Reasoning/thinking content               |
 
 ## Stateful Continuation (HITL)
 
@@ -214,6 +128,9 @@ For Human-in-the-Loop flows with deferred tools:
 2. **Response chunks** include `id` field (= `run_id`)
 3. **Continuation request** sends `run_id` + `tool_results`/`approvals`
 4. **Server loads history** from store and continues
+
+Note: this adapter emits `approval.id` as the tool call ID so client approvals
+can be keyed by `tool_call_id` without extra mapping.
 
 ```python
 # Continuation request format
@@ -225,19 +142,72 @@ For Human-in-the-Loop flows with deferred tools:
 }
 ```
 
-## Demo
+### Approval Formats
+
+The `approvals` field supports multiple formats, mapped to pydantic-ai's `ToolApproved` and `ToolDenied` types:
+
+| Format | Type | Description |
+|--------|------|-------------|
+| `true` | boolean | Simple approval - execute the tool as-is |
+| `false` | boolean | Simple denial - tool execution blocked |
+| `{"kind": "tool-approved", ...}` | object | Approval with optional argument override |
+| `{"kind": "tool-denied", ...}` | object | Denial with message for the LLM |
+
+#### ToolApproved with `override_args`
+
+Approve the tool call but **modify the arguments** before execution:
+
+```json
+{
+  "approvals": {
+    "tool_call_id_1": {
+      "kind": "tool-approved",
+      "override_args": {
+        "path": "/safe/backup/file.txt"
+      }
+    }
+  }
+}
+```
+
+**Use cases:**
+- **File operations**: Change target path to a safer location
+- **Email sending**: Modify recipients or subject before sending
+- **API calls**: Adjust parameters (amounts, quantities, limits)
+- **Database operations**: Add WHERE conditions for safety
+
+#### ToolDenied with `message`
+
+Deny the tool call and **explain why** to the LLM:
+
+```json
+{
+  "approvals": {
+    "tool_call_id_2": {
+      "kind": "tool-denied",
+      "message": "Budget exceeded. Please suggest alternatives under $500."
+    }
+  }
+}
+```
+
+**Use cases:**
+- **Purchase approval**: "Over budget, try under $100"
+- **Scheduling**: "That day is a holiday, use the next business day"
+- **Permissions**: "User lacks admin privileges for this action"
+- **Policy violations**: "Cannot include confidential data"
+
+The LLM receives the denial message and can propose alternatives based on the feedback.
+
+## Testing
 
 ```sh
-# Start demo server
-uv run uvicorn examples.backend.demo_server:app --host 127.0.0.1 --port 8000 &
-
-# Run frontend verification
-cd examples/frontend
-npm run verify
+cd backend
+uv run pytest packages/tanstack-pydantic-ai/tests
 ```
 
 ## References
 
 - [TanStack AI StreamChunk](https://tanstack.com/ai/latest/docs/reference/type-aliases/StreamChunk)
-- [pydantic-ai Deferred Tools](https://ai.pydantic.dev/deferred-tools/)
 - [pydantic-ai UIAdapter](https://ai.pydantic.dev/ui/)
+- [pydantic-ai Deferred Tools](https://ai.pydantic.dev/deferred-tools/)

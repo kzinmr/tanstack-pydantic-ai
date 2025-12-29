@@ -7,24 +7,25 @@ Supports stateful continuation for deferred tools (HITL flows).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from typing import (
     Any,
-    AsyncIterator,
-    Callable,
-    Dict,
-    Generic,
-    List,
-    Mapping,
-    Optional,
 )
 
 from pydantic import TypeAdapter
-from pydantic_ai import Agent, DeferredToolRequests, DeferredToolResults
+from pydantic_ai import (
+    Agent,
+    AgentRunResultEvent,
+    DeferredToolRequests,
+    DeferredToolResults,
+    ToolApproved,
+    ToolDenied,
+)
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -35,17 +36,40 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from pydantic_ai.output import OutputDataT
-from pydantic_ai.tools import AgentDepsT
 
-from ..shared.chunks import StreamChunk
+from ..shared.chunks import StreamChunk, UsageObj
 from ..shared.sse import encode_done
-from ..shared.store import InMemoryRunStore
+from ..shared.store import RunStorePort
 from ._event_stream import TanStackEventStream
 from .request_types import RequestData, UIMessage
 
 # Type adapter for parsing request data
 request_data_ta = TypeAdapter(RequestData)
+
+
+def _convert_approvals(
+    approvals: dict[str, bool | dict[str, Any]],
+) -> dict[str, bool | ToolApproved | ToolDenied]:
+    """Convert request approvals to pydantic-ai DeferredToolResults format."""
+    result: dict[str, bool | ToolApproved | ToolDenied] = {}
+    for tool_call_id, value in approvals.items():
+        if isinstance(value, bool):
+            result[tool_call_id] = value
+        elif isinstance(value, dict):
+            kind = value.get("kind")
+            if kind == "tool-approved":
+                result[tool_call_id] = ToolApproved(
+                    override_args=value.get("override_args")
+                )
+            elif kind == "tool-denied":
+                result[tool_call_id] = ToolDenied(
+                    message=value.get("message", "The tool call was denied.")
+                )
+            else:
+                result[tool_call_id] = False
+        else:
+            result[tool_call_id] = False
+    return result
 
 
 OnCompleteFunc = Callable[["AgentRunResult"], Any] | None
@@ -57,7 +81,7 @@ except ImportError:
 
 
 @dataclass
-class TanStackAIAdapter(Generic[AgentDepsT, OutputDataT]):
+class TanStackAIAdapter[AgentDepsT, OutputDataT]:
     """
     UI adapter for TanStack AI protocol.
 
@@ -100,9 +124,81 @@ class TanStackAIAdapter(Generic[AgentDepsT, OutputDataT]):
 
     agent: Agent[AgentDepsT, OutputDataT]
     run_input: RequestData
-    accept: Optional[str] = None
-    deps: Optional[AgentDepsT] = None
-    store: Optional[InMemoryRunStore] = None
+    accept: str | None = None
+    deps: AgentDepsT | None = None
+    store: RunStorePort | None = None
+
+    # ─────────────────────────────────────────────────────────────────
+    # Static helpers
+    # ─────────────────────────────────────────────────────────────────
+    @staticmethod
+    async def error_response(
+        message: str,
+        *,
+        model: str = "unknown",
+        run_id: str,
+        error_code: str | None = None,
+    ) -> AsyncIterator[bytes]:
+        """
+        Produce a TanStack-compatible SSE stream for initialization errors.
+        """
+        from ..shared.chunks import DoneStreamChunk, ErrorObj, ErrorStreamChunk
+        from ..shared.sse import encode_chunk, encode_done, now_ms
+
+        yield encode_chunk(
+            ErrorStreamChunk(
+                id=run_id,
+                model=model,
+                timestamp=now_ms(),
+                error=ErrorObj(message=message, code=error_code),
+            )
+        ).encode("utf-8")
+        yield encode_chunk(
+            DoneStreamChunk(
+                id=run_id,
+                model=model,
+                timestamp=now_ms(),
+                finishReason="stop",
+            )
+        ).encode("utf-8")
+        yield encode_done().encode("utf-8")
+
+    @staticmethod
+    async def stream_with_error_handling(
+        stream: AsyncIterator[bytes],
+        *,
+        model: str = "unknown",
+        run_id: str,
+    ) -> AsyncIterator[bytes]:
+        """
+        Wrap a streaming response to emit TanStack-compatible error chunks.
+        """
+        from ..shared.chunks import DoneStreamChunk, ErrorObj, ErrorStreamChunk
+        from ..shared.sse import encode_chunk, encode_done, now_ms
+
+        try:
+            async for chunk in stream:
+                yield chunk
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            yield encode_chunk(
+                ErrorStreamChunk(
+                    id=run_id,
+                    model=model,
+                    timestamp=now_ms(),
+                    error=ErrorObj(message=str(exc)),
+                )
+            ).encode("utf-8")
+            yield encode_chunk(
+                DoneStreamChunk(
+                    id=run_id,
+                    model=model,
+                    timestamp=now_ms(),
+                    finishReason="stop",
+                )
+            ).encode("utf-8")
+            yield encode_done().encode("utf-8")
 
     # ─────────────────────────────────────────────────────────────────
     # Factory methods
@@ -114,10 +210,10 @@ class TanStackAIAdapter(Generic[AgentDepsT, OutputDataT]):
         agent: Agent[AgentDepsT, OutputDataT],
         body: bytes,
         *,
-        accept: Optional[str] = None,
-        deps: Optional[AgentDepsT] = None,
-        store: Optional[InMemoryRunStore] = None,
-    ) -> "TanStackAIAdapter[AgentDepsT, OutputDataT]":
+        accept: str | None = None,
+        deps: AgentDepsT | None = None,
+        store: RunStorePort | None = None,
+    ) -> TanStackAIAdapter[AgentDepsT, OutputDataT]:
         """
         Create adapter from HTTP request body.
 
@@ -126,7 +222,7 @@ class TanStackAIAdapter(Generic[AgentDepsT, OutputDataT]):
             body: Raw request body bytes
             accept: Optional Accept header value
             deps: Optional agent dependencies
-            store: Optional run store for stateful continuation
+            store: Optional RunStorePort for stateful continuation
 
         Note:
             If run_id is not provided in the request, a new one is generated.
@@ -177,12 +273,12 @@ class TanStackAIAdapter(Generic[AgentDepsT, OutputDataT]):
     # ─────────────────────────────────────────────────────────────────
 
     @cached_property
-    def messages(self) -> List[ModelMessage]:
+    def messages(self) -> list[ModelMessage]:
         """Pydantic AI messages from the TanStack AI run input."""
         return self.load_messages(self.run_input.messages)
 
     @classmethod
-    def load_messages(cls, messages: Sequence[UIMessage]) -> List[ModelMessage]:
+    def load_messages(cls, messages: Sequence[UIMessage]) -> list[ModelMessage]:
         """
         Transform TanStack AI messages into pydantic-ai messages.
 
@@ -192,7 +288,7 @@ class TanStackAIAdapter(Generic[AgentDepsT, OutputDataT]):
         - assistant -> TextPart/ToolCallPart in ModelResponse
         - tool -> ToolReturnPart in ModelRequest
         """
-        result: List[ModelMessage] = []
+        result: list[ModelMessage] = []
 
         for msg in messages:
             if msg.role == "system":
@@ -204,7 +300,7 @@ class TanStackAIAdapter(Generic[AgentDepsT, OutputDataT]):
                     ModelRequest(parts=[UserPromptPart(content=msg.content or "")])
                 )
             elif msg.role == "assistant":
-                parts: List[Any] = []
+                parts: list[Any] = []
                 if msg.content:
                     parts.append(TextPart(content=msg.content))
                 if msg.toolCalls:
@@ -235,13 +331,13 @@ class TanStackAIAdapter(Generic[AgentDepsT, OutputDataT]):
         return result
 
     @classmethod
-    def dump_messages(cls, messages: Sequence[ModelMessage]) -> List[UIMessage]:
+    def dump_messages(cls, messages: Sequence[ModelMessage]) -> list[UIMessage]:
         """
         Transform pydantic-ai messages into TanStack AI messages.
 
         Used when returning conversation history to the frontend.
         """
-        result: List[UIMessage] = []
+        result: list[UIMessage] = []
 
         for msg in messages:
             if isinstance(msg, ModelRequest):
@@ -272,6 +368,8 @@ class TanStackAIAdapter(Generic[AgentDepsT, OutputDataT]):
                     elif isinstance(part, ToolCallPart):
                         from .request_types import (
                             ToolCallFunction,
+                        )
+                        from .request_types import (
                             ToolCallPart as TCPart,
                         )
 
@@ -307,7 +405,7 @@ class TanStackAIAdapter(Generic[AgentDepsT, OutputDataT]):
         return ""
 
     @property
-    def message_history(self) -> List[ModelMessage]:
+    def message_history(self) -> list[ModelMessage]:
         """
         Get message history for agent run.
 
@@ -342,7 +440,7 @@ class TanStackAIAdapter(Generic[AgentDepsT, OutputDataT]):
                             if isinstance(part, ToolCallPart) and part.tool_call_id:
                                 existing_tool_call_ids.add(part.tool_call_id)
 
-                injected_parts: List[ToolCallPart] = []
+                injected_parts: list[ToolCallPart] = []
 
                 def _inject_from(parts: Any) -> None:
                     for p in parts or []:
@@ -388,7 +486,6 @@ class TanStackAIAdapter(Generic[AgentDepsT, OutputDataT]):
         This provides the raw event stream before transformation.
         Also saves results to store for stateful continuation.
         """
-        from pydantic_ai import AgentRunResultEvent
 
         run_id = self.run_id
         model = self.run_input.model
@@ -405,7 +502,7 @@ class TanStackAIAdapter(Generic[AgentDepsT, OutputDataT]):
                     return True
             return False
 
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "message_history": self.message_history,
         }
         # Only pass output_type when it's safe to do so (i.e. no output validators).
@@ -420,7 +517,7 @@ class TanStackAIAdapter(Generic[AgentDepsT, OutputDataT]):
         # Handle continuation with deferred tool results
         if self.is_continuation:
             deferred = DeferredToolResults(
-                approvals=self.run_input.approvals,
+                approvals=_convert_approvals(self.run_input.approvals),
                 calls=self.run_input.tool_results,
             )
             kwargs["deferred_tool_results"] = deferred
@@ -454,7 +551,6 @@ class TanStackAIAdapter(Generic[AgentDepsT, OutputDataT]):
         Args:
             on_complete: Optional callback when agent run completes
         """
-        from pydantic_ai import AgentRunResultEvent
 
         event_stream = self.build_event_stream()
         model_name = self.run_input.model or "unknown"
@@ -468,9 +564,50 @@ class TanStackAIAdapter(Generic[AgentDepsT, OutputDataT]):
                     captured_result = event.result
                 yield event
 
+        def _usage_from_result() -> UsageObj | None:
+            if captured_result is None:
+                return None
+            try:
+                usage_data = captured_result.usage()
+            except Exception:
+                return None
+            if not usage_data:
+                return None
+
+            def _get_usage_value(*names: str) -> int | None:
+                for name in names:
+                    if isinstance(usage_data, dict) and name in usage_data:
+                        return int(usage_data[name])
+                    if hasattr(usage_data, name):
+                        return int(getattr(usage_data, name))
+                return None
+
+            prompt_tokens = _get_usage_value(
+                "prompt_tokens", "promptTokens", "input_tokens", "inputTokens"
+            )
+            completion_tokens = _get_usage_value(
+                "completion_tokens",
+                "completionTokens",
+                "output_tokens",
+                "outputTokens",
+            )
+            total_tokens = _get_usage_value("total_tokens", "totalTokens")
+
+            if prompt_tokens is None or completion_tokens is None:
+                return None
+            if total_tokens is None:
+                total_tokens = prompt_tokens + completion_tokens
+
+            return UsageObj(
+                promptTokens=prompt_tokens,
+                completionTokens=completion_tokens,
+                totalTokens=total_tokens,
+            )
+
         async for chunk in event_stream.transform_stream(
             capturing_native_events(),
             model_name=model_name,
+            usage_provider=_usage_from_result,
         ):
             yield chunk
 
